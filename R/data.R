@@ -612,3 +612,78 @@ collett_data <- function(name) {
     utils::read.table(system.file(paste0("extdata/",new_name),package="collett"),
                       header=TRUE)
 }
+
+
+#' @title Simulated data
+#' @description Simulated data with left truncated follow-up and
+#'     potentially right censored outcomes.
+#' @format A data frame with 30 observations and 8 variables:
+#' \describe{
+#'   \item{\code{id}}{integer index each individual}
+#'   \item{\code{trt}}{numeric for whether treated (1=treated; 0=not treated)}
+#'   \item{\code{age}}{integer for age in years}
+#'   \item{\code{entry_time}}{numeric for year of entry}
+#'   \item{\code{observed_duration}}{numeric for years that an individual was observed}
+#'   \item{\code{status}}{integer for status at the end of follow-up (1=event, 0=censored)}
+#'   \item{\code{event_calendar_time}}{numeric hypothetical event time in calendar time}
+#'   \item{\code{stop_calendar_time}}{numeric end of follow-up in calendar time}
+#'}
+#' @examples
+#' ## Simulate 30 individuals survival based on Weibull distribution
+#' set.seed(13579)
+#' n <- 30
+#' 
+#' ## Randomly assign treatment groups (15 each)
+#' trt <- sample(c(1, 0), n, replace = TRUE)
+#' 
+#' ## Randomly assign integer age 50-80 to each individual
+#' age <- sample(50:80, n, replace = TRUE)
+#' 
+#' ## Simulate true event times based on Weibull distribution
+#' true_shape <- 3
+#' true_scale <- 8
+#' true_times <- rweibull(n, shape = true_shape, scale = true_scale)
+#' 
+#' ## Simulate right censoring times based on exponential distribution
+#' censoring_rate <- 0.1
+#' censoring_times <- rexp(n, rate = censoring_rate)
+#' 
+#' ## Random entry times
+#' entry_time <- runif(n, min = 2000, max = 2010)
+#' 
+#' ## Convert durations (time-on-study) to calendar times
+#' event_calendar_time <- entry_time + true_times
+#' censor_calendar_time <- entry_time + censoring_times
+#' 
+#' ## Study end time (Administrative Censoring)
+#' study_end_time <- 2012
+#' study_censor_calendar_time <- rep(study_end_time, n)
+#' 
+#' ## Determine the calendar time when observation ends
+#' stop_calendar_time <- pmin(event_calendar_time, censor_calendar_time,
+#'                            study_censor_calendar_time)
+#'
+#' ## Calculate the observed duration
+#' observed_duration <- stop_calendar_time - entry_time
+#' 
+#' ## Create tied data
+#' observed_duration <- round(observed_duration * 2) / 2
+#' 
+#' ## Determine the final status (1 if event, 0 if censored)
+#' status <- as.integer(event_calendar_time <= pmin(censor_calendar_time, study_censor_calendar_time))
+#' 
+#' ## Create a data frame
+#' simdata <- data.frame(
+#'   id = 1:n,
+#'   trt, ## Treatment group
+#'   age, ## Age at diagnosis
+#'   entry_time, ## When they entered (Calendar time)
+#'   observed_duration, ## Time-on-study
+#'   status, ## Event status (1=event, 0=censored)
+#'   event_calendar_time, ## Hypothetical event time (Calendar time)
+#'   stop_calendar_time ## When observation ended (Calendar time)
+#' )
+#' ## Save the data frame
+#' ## save(simdata, file = "~/src/R/collett/data/simdata.rda")
+"simdata"
+

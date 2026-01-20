@@ -114,4 +114,9 @@ Useful links:
 \author{
 \strong{Maintainer}: Mark Clements \email{mark.clements@ki.se} (\href{https://orcid.org/0000-0003-4518-5670}{ORCID})
 
+Other contributors:
+\itemize{
+  \item Enoch Yi-Tung Chen \email{enoch.yitung.chen@ki.se} (\href{https://orcid.org/0000-0003-2448-708X}{ORCID}) [contributor]
+}
+
 }

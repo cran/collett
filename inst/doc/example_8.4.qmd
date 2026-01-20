@@ -1,0 +1,181 @@
+---
+title: "Survival Analysis in Medical Research"
+author:
+- Code by Mark Clements
+format:
+  html:
+    minimal: true
+filters:
+  - webr
+execute:
+  echo: true
+  message: false
+  cache: false
+  fig-width: 7
+  fig-height: 6
+---
+
+# Example 8.4: Data from a cirrhosis study
+
+
+```{webr-r}
+#| context: setup
+options(width=90)
+```
+
+- We use the following three libraries:
+
+```{r}
+#| autorun: true
+library(knitr) # kable
+library(collett) # lbrdata0, liverbase
+library(survival) # coxph
+deviance = function(object) -2*as.numeric(logLik(object))
+```
+
+- The following data were used in the analysis; see Tables 8.4 and 8.5 in Collett (2023).
+
+```{r}
+#| results: 'asis'
+kable(collett::liverbase, "html")
+```
+
+```{r}
+#| results: 'asis'
+kable(collett::lbrdata0, "html")
+```
+
+- We can merge the data together using the `survival::tmerge` function. The trick here is to first `tmerge` the baseline `collett::liverbase` dataset with itself and then merge in the exposure data:
+
+```{r}
+temp = transform(collett::liverbase, lbr=NULL)
+liver = tmerge(temp, temp, id=patient, status=event(time,status)) |>
+    tmerge(rbind(with(collett::liverbase, data.frame(patient,tstart=0,lbr)),
+                 with(collett::lbrdata0, data.frame(patient,tstart=time,lbr))),
+           id=patient, lbr = tdc(tstart,lbr))
+```
+
+- Table 8.6:
+
+```{r}
+coxph(Surv(time,status)~1,collett::liverbase) |> deviance()
+coxph(Surv(time,status)~age,collett::liverbase) |> deviance()
+coxph(Surv(time,status)~lbr,collett::liverbase) |> deviance()
+(fit2 <- coxph(Surv(time,status)~age+lbr,collett::liverbase)) |> deviance()
+```
+
+- Inclusion of `treat`:
+
+```{r}
+(fit3 <- coxph(Surv(time,status)~age+lbr+treat,collett::liverbase)) |> deviance()
+summary(fit3)
+anova(fit2,fit3)
+```
+
+- Analysis of log(bilirubin) as a time-varying exposure
+
+```{r}
+coxph(Surv(tstart,tstop,status)~1,liver) |> deviance()
+coxph(Surv(tstart,tstop,status)~age,liver) |> deviance()
+coxph(Surv(tstart,tstop,status)~lbr,liver) |> deviance()
+(fit2 <- coxph(Surv(tstart,tstop,status)~age+lbr,liver)) |> deviance()
+```
+
+- Inclusion of `treat`
+
+```{r}
+(fit3 <- coxph(Surv(tstart,tstop,status)~lbr+treat,liver)) |> deviance()
+summary(fit3)
+```
+
+- Cumulative hazard (Table 8.8):
+
+```{r}
+sfit3 = survfit(fit3,newdata=data.frame(treat=0,lbr=0))
+with(summary(sfit3), data.frame(time,H0=-log(surv)))
+```
+
+- Figure 8.5 
+
+```{r}
+sfit3 = survfit(fit3,newdata=data.frame(treat=0:1,lbr=3))
+plot(sfit3, col=c("black","grey"), lwd=2, xlab="Survival time (days)",
+     ylab="Estimated survival function")
+legend("bottomleft",c("Placebo","Liverol"), lwd=2, col=c("black","grey"))
+```
+
+## Predicted survival for time-varying exposures
+
+- For Table 8.9, the author proposes an estimand based on a constant exposure for the exposure that is at or immediately precedes the start time:
+
+```{r}
+table_8.9 = function(object,data,times) {
+    ## find the tstart that is at or immediately precedes the specified times
+    newdata = data[findInterval(head(times,-1),data$tstart),] |>
+        ## set up the start and stop times and initialise the surv variable
+        transform(tstart=head(times,-1),
+                  tstop=times[-1],
+                  surv=NA)
+    ## the following could be vectorised -- but the for-loop may be easier to read
+    for (i in 1:nrow(newdata)) {
+        row = newdata[i,]
+        ## predict survival for that row
+        summ = summary(survfit(object, newdata=row, start.time=row$tstart),
+                       times=row$tstop)
+        newdata$surv[i] = summ$surv
+    }
+    newdata
+}
+table_8.9(fit3, subset(liver, patient==1), times = seq(0,360*4,by=360))
+table_8.9(fit3, subset(liver, patient==7), times = seq(0,360*4,by=360))
+
+```
+
+
+### Extension
+
+- It may be more elegant to allow for a time-varying exposure for the intervals.
+
+- We have written: (a) a function `collett::predict_coxph_tv` to predict survival for subjects with different time-varying exposures; and (b) used that function to predict interval-specific survival for specified times (`predict_coxph_tv_cond`; see below).
+
+- As a reminder, for a time-varying exposure $x_i(t)$ for subject $i$ and time $t$, we have that $S_i(t) = \exp\left(-\int_0^t \exp(x_i(u)^T \beta) d\Lambda_0(u)\right)$, where $\Lambda_0(u)$ is the estimated baseline cumulative hazard. Note that the integration is a sum, so that the survival calculations are products.
+
+```{r}
+#' @param object a coxph object
+#' @param data a data-frame or tmerge object with columns tstart, tstop, status, an id and the exposure variables
+#' @param id a character for the subject id
+#' @param times a numeric vector of times (a zero will be added to the start if not included)
+#' @returns a data-frame with cumulative and interval-specific survival probabilities
+predict_coxph_tv_cond = function(object,data,id,times) {
+    stopifnot(inherits(object,"coxph"),
+              inherits(data,"data.frame"),
+              all(c("tstart","tstop","status",id) %in% names(data)),
+              is.numeric(times))
+    if (times[1] != 0) times = c(0,times)
+    data2 = by(data, data[[id]], function(datai)
+        ## append for the later times
+        if (max(datai$tstop)>max(times))
+            datai else rbind(datai,
+                            transform(datai[nrow(datai),],
+                                      tstart=tstop,tstop=max(times),status=0))) |>
+        do.call(what=rbind) |>
+        ## and split the times
+        survSplit(Surv(tstart,tstop,status)~., data=_, cut=times)
+    data3 = predict_coxph_tv(object, data2, id)
+    by(data3, data3[[id]], function(datai) {
+        ## survival and cumulative hazards at the required times
+        surv = subset(datai, tstop %in% times)$surv
+        H = c(0,-log(surv)) # padded with H(0)=0
+        ## interval-specific survival for required times
+        newdata2 = data.frame(id=datai[[id]][1],
+                              tstart=head(times,-1),
+                              tstop=times[-1],
+                              surv,
+                              P=exp(-diff(H)))
+        names(newdata2)[1] = id
+        newdata2
+    }) |> do.call(what=rbind)
+}
+predict_coxph_tv_cond(fit3,data=subset(liver,patient %in% c(1,7)),
+                      id="patient",times=seq(0,360*4,by=360))
+```

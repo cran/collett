@@ -1,0 +1,199 @@
+---
+title: "Survival Analysis in Medical Research"
+author:
+- Code by Mark Clements
+format:
+  html:
+    minimal: true
+filters:
+  - webr
+execute:
+  echo: true
+  message: false
+  cache: false
+  fig-width: 7
+  fig-height: 6
+---
+
+# Example 8.2: Bone marrow transplantation in the treatment of leukaemia
+
+
+```{webr-r}
+#| context: setup
+options(width=90)
+```
+
+- We use the following three libraries:
+
+```{webr-r}
+#| autorun: true
+library(knitr) # kable
+library(collett) # leukaemia
+library(survival) # coxph
+```
+
+- The following data were used in the analysis; see Table 8.2 in Collett (2023).
+
+```{webr-r}
+#| results: 'asis'
+kable(collett::leukaemia, "html")
+```
+
+- Note that the column `ptime` is actually a string, with `"."` as missing values:
+
+```{webr-r}
+str(collett::leukaemia)
+table(collett::leukaemia$ptime)
+```
+
+- We can read in those values using `as.numeric`, but then we would get a warning with the missing values. As a better approach, we convert the string values using `type.convert` and make the missing values large (`Inf` would be a nice approach, but that causes problems later):
+	
+```{webr-r}
+#| autorun: true
+leuk = transform(collett::leukaemia,
+                 ptime = ifelse(ptime==".", 1e5,
+                                type.convert(ptime, na.strings = ".", as.is = TRUE)),
+                 group = factor(group, labels=c("ALL","LR-AML","HR-AML")))
+```
+
+- Collett then goes on to show that the age of the patient (`page`) and age the age of the blood donor (`dage`) do not significantly predict patient death. Confirm this observation using the following code. Explain the following the code and explain why we have done this two ways.
+
+```{webr-r}
+coxph(Surv(time,status)~page+dage,data=leuk) |> anova()
+coxph(Surv(time,status)~dage+page,data=leuk) |> anova()
+```
+
+## Time-dependent modelling using `tt`
+
+- We can model the time-dependent effect of platelets returning to normal using the `tt` argument in `coxph`. Interpret the following model, its summary and its anova.
+
+```{webr-r}
+fit1 = coxph(Surv(time,status)~tt(ptime),data=leuk,
+             tt=function(x,t,...) t>=x)
+summary(fit1)
+anova(fit1)
+```
+
+- Collett also describes adding `group` to the analysis. Interpret the following model, its summary and its anova.
+
+```{webr-r}
+fit2 = coxph(Surv(time,status)~group+tt(ptime),data=leuk,
+             tt=function(x,t,...) t>=x)
+summary(fit2)
+anova(fit2)
+```
+
+- Unfortunately, we are not able to use `survfit` with a `coxph` object with a `tt` term. Run the following code to confirm this observation:
+
+```{webr-r}
+summary(survfit(fit2,newdata=data.frame(group="ALL",ptime=0))) # fails
+summary(survfit(fit2,newdata=data.frame(group="ALL",ptime=1e5))) # fails
+```
+
+## Time-dependent modelling by hand
+
+- We split the time before and after platelets return to normal. This could be implemented a number of ways, including using `survival::survSplit` or using `Epi::splitLexis`, or using `data.table` or `dplyr`. In our implementation, we have first taken the time intervals that start at time 0, and then combined those time intervals with the time intervals that start at `ptime` when `ptime<time`.
+
+```{webr-r}
+#| autorun: true
+  leuk2 = rbind(transform(leuk,
+                          tstart=0, pind=0,
+                          time=pmin(ptime,time),
+                          status=ifelse(ptime<time,0,status)),
+                subset(leuk, ptime<time) |>
+                transform(tstart=ptime,pind=1))
+```
+
+- We can now using the counting process notation for `Surv` to model the different time segments. Are these results similar to the results using `tt`?
+
+```{webr-r}
+fit1b = coxph(Surv(tstart,time,status)~pind,data=leuk2)
+summary(fit1b)
+anova(fit1b)
+fit2b = coxph(Surv(tstart,time,status)~group+pind,data=leuk2)
+summary(fit2b)
+anova(fit2b,fit1b)
+```
+
+- Using these data, we are now able to use `survfit` to predict survival assuming that platelets do not return to normal (`pind=0`) or that platelets return to normal at `t=0` (`pind=1`):
+
+```{webr-r}
+summary(survfit(fit2b,newdata=data.frame(group="ALL",pind=0)))
+summary(survfit(fit2b,newdata=data.frame(group="ALL",pind=1)))
+```
+
+- Factually, do any observations start with platelets at normal? What does this imply about the predictions for survival for those with `pind=1`?
+
+## Extension: survival predictions given a time-varying exposure
+
+- The previous predictions where for either no platelet recovery or immediate platelet recovery. We may be interested in estimating survival with platelet recovery at a specific time. We are not aware of an R package for these calculations. We present some code for doing this -- assuming  platelet recovery at 100 days.
+
+```{webr-r}
+#' Predict survival from a coxph model with a time-varying exposure
+#' @param object a coxph object with a time-varying exposure
+#' @param newdata a data-frame with baseline covariates (assuming unexposed)
+#' @param var a character variable with the name of the time-varying
+#'     exposure to be incremented
+#' @param times a numeric vector of times to be predicted
+#' @param dtime a numeric scale of the time at the change of exposure
+#' @returns a data-frame with variables time, surv, lower, upper
+predict_coxph_surv = function(object, newdata, var, times, dtime) {
+    pred = function(newdata,times)
+        with(summary(survfit(object,newdata),times=times),
+             data.frame(time, surv, lower, upper))
+    newdata1 = newdata
+    newdata1[[var]] = newdata1[[var]]+1
+    ratio = pred(newdata,dtime)$surv / pred(newdata1,dtime)$surv
+    if (any(times<=dtime))
+        surv = pred(newdata,times[times<=dtime])
+    if (any(times>dtime))
+        surv1 = pred(newdata1,times[times>dtime])
+    if (all(times<=dtime))
+        return(surv)
+    surv1$surv = ifelse(is.nan(surv1$surv*ratio),0,surv1$surv*ratio) # ??
+    surv1$lower = surv1$upper = NA
+    if (all(times>dtime)) surv1 else rbind(surv, surv1)
+}          
+predict_coxph_surv(fit2b, newdata=data.frame(group="ALL",pind=0),
+                   times=c(100,200),
+                   var="pind", dtime=100)
+```
+
+- Compare with this our earlier approach of never versus immediate platelet recovery: 
+
+```{webr-r}
+summary(survfit(fit2b,newdata=data.frame(group="ALL",pind=0)),times=c(100,200))
+summary(survfit(fit2b,newdata=data.frame(group="ALL",pind=1)),times=c(100,200))
+```
+
+- For interval estimation, we present an approach using the bootstrap. Note that we resample for patients rather than rows.
+
+```{webr-r}
+library(boot)
+patients = data.frame(patient=sort(unique(leuk2$patient)))
+set.seed(12345)
+boot1 = boot(patients, statistic = function(data, index) {
+    leuk3 = merge(data[index,,drop=FALSE], leuk2)
+    object = coxph(Surv(tstart,time,status)~group+pind,data=leuk3)
+    predict_coxph_surv(object, newdata=data.frame(group="ALL",pind=0),
+                       times=c(100,200),
+                       var="pind", dtime=100)$surv
+}, R=1000)
+warnings()
+```
+
+- Based on the warnings, all did not go to plan:(. The output is as follows:
+
+```{webr-r}
+boot1
+boot.ci(boot1,index=1)
+boot.ci(boot1,index=2)
+```
+
+- Consider the following plot. What does this suggest to you?
+
+```{webr-r}
+plot(density(boot1$t[,2], from=0, to=1))
+```
+
+

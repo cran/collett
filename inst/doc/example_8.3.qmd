@@ -1,0 +1,71 @@
+---
+title: "Survival Analysis in Medical Research"
+author:
+- Code by Mark Clements
+format:
+  html:
+    minimal: true
+filters:
+  - webr
+execute:
+  echo: true
+  message: false
+  cache: false
+  fig-width: 7
+  fig-height: 6
+---
+
+# Example 8.3: Chemotherapy in ovarian cancer patients
+
+
+```{webr-r}
+#| context: setup
+options(width=90)
+```
+
+- We use the following three libraries:
+
+```{r}
+#| autorun: true
+library(knitr) # kable
+library(collett) # leukaemia
+library(survival) # coxph
+```
+
+- The following data were used in the analysis; see Table 8.2 in Collett (2023).
+
+```{r}
+#| results: 'asis'
+kable(collett::ovarian, "html")
+```
+
+```{r}
+str(collett::ovarian)
+```
+
+```{r}
+fit1 = coxph(Surv(time,status)~age+treat,collett::ovarian)
+summary(fit1)
+as.numeric(-2*logLik(fit1))
+```
+
+
+```{r}
+fit2 = coxph(Surv(time,status)~age+treat+tt(age),collett::ovarian,
+             tt=function(x,t,...) x*t)
+summary(fit2)
+as.numeric(-2*logLik(fit2))
+```
+
+- Problem with `anova` with a `tt` argument, hence we split at the event times. We also add a new variable `t=time` to avoid a warning `"a variable appears on both the left and right sides of the formula"`.
+
+```{r}
+event_times = unique(subset(collett::ovarian,status==1)$time)
+ovar = survSplit(Surv(time,status)~., data=collett::ovarian,
+                 cut=event_times) |>
+    transform(t=time) 
+fit3 = coxph(Surv(tstart,time,status)~age+treat+age:t,data=ovar)
+summary(fit3)
+as.numeric(-2*logLik(fit3))
+anova(fit3)
+```

@@ -4,9 +4,9 @@
 \name{collett-package}
 \alias{collett}
 \alias{collett-package}
-\title{collett: Datasets and Examples from "Modelling Survival Data in Medical Research" by Collett}
+\title{collett: Datasets from "Modelling Survival Data in Medical Research" by Collett}
 \description{
-Datasets and Examples from "Modelling Survival Data in Medical Research" by Collett.
+Datasets for the book entitled "Modelling Survival Data in Medical Research" by Collett (2023) \doi{10.1201/9781003282525}. The datasets provide extensive examples of time-to-event data.
 }
 \seealso{
 Useful links:
@@ -18,6 +18,11 @@ Useful links:
 }
 \author{
 \strong{Maintainer}: Mark Clements \email{mark.clements@ki.se} (\href{https://orcid.org/0000-0003-4518-5670}{ORCID})
+
+Other contributors:
+\itemize{
+  \item Enoch Yi-Tung Chen \email{enoch.yitung.chen@ki.se} (\href{https://orcid.org/0000-0003-2448-708X}{ORCID}) [contributor]
+}
 
 }
 \keyword{internal}
